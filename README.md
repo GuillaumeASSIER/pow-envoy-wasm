@@ -1,5 +1,11 @@
 # pow-proxy, en Rust
 
+[![CI](https://github.com/GuillaumeASSIER/pow-envoy-wasm/actions/workflows/ci.yml/badge.svg)](https://github.com/GuillaumeASSIER/pow-envoy-wasm/actions/workflows/ci.yml)
+
+> Reecriture en Rust du plugin Go
+> [kubewaf-io/pow-proxy-wasm](https://github.com/kubewaf-io/pow-proxy-wasm),
+> sous Apache-2.0. Format identique sur le fil.
+
 Filtre Proxy-WASM de challenge proof-of-work, a poser sur la passerelle Istio.
 
 Quand une requete arrive sans preuve, le filtre repond un 403 avec une page de
@@ -11,6 +17,18 @@ nouvelle preuve.
 Le cout retombe sur le client, pas sur le bord : c'est le principe, et c'est ce
 qui rend la brique interessante pour un bord qui doit encaisser du trafic
 automatise sans investir dans du calcul de son cote.
+
+## Documentation
+
+- [`docs/protocol.md`](docs/protocol.md) : le format exact de ce qui circule, de
+  quoi ecrire un client dans un autre langage.
+- [`docs/configuration.md`](docs/configuration.md) : chaque cle, sa borne, son
+  defaut, et les cas ou le module refuse de se charger.
+- [`docs/architecture.md`](docs/architecture.md) : organisation du crate, ce qui
+  est verifie et ce qui ne l'est pas.
+- [`docs/deployment.md`](docs/deployment.md) : artefact OCI, ressource
+  `WasmPlugin`, et les pieges de format qui font echouer un deploiement.
+- [`NOTICE`](NOTICE) : attribution de l'amont et perimetre de la reprise.
 
 ## Origine et licence
 

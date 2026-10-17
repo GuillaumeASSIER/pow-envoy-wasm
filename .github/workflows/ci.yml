@@ -1,0 +1,100 @@
+# Integration continue du filtre de challenge.
+#
+# Tout tourne sans secret et sans cluster : mise en forme, Clippy, tests natifs,
+# recoupement avec l'implementation de reference, compilation wasm, controle des
+# imports du module, et verification de l'artefact OCI contre les regles du
+# recuperateur d'Istio.
+#
+# Ce qui n'est pas verifie ici, et ne peut pas l'etre sans un vrai proxy : le
+# chargement du module dans Envoy, donc le branchement des hostcalls. Les tests
+# couvrent la logique et le format ; l'adaptateur n'est exerce qu'en production.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  ORAS_VERSION: 1.3.0
+  # Somme de oras_1.3.0_linux_amd64.tar.gz sur la publication officielle.
+  ORAS_SHA256: 6cdc692f929100feb08aa8de584d02f7bcc30ec7d88bc2adc2054d782db57c64
+
+jobs:
+  filter:
+    name: Filtre
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Mise en forme
+        run: cargo fmt --check
+
+      - name: Clippy, avertissements bloquants
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests natifs et recoupement avec la reference
+        run: cargo test
+
+      - name: Les vecteurs de recoupement viennent bien du generateur
+        run: |
+          python3 tools/gen_vectors.py --rust > /tmp/parity_vectors.rs
+          diff -u tests/data/parity_vectors.rs /tmp/parity_vectors.rs
+          echo "vecteurs conformes au generateur : ils n'ont pas ete retouches a la main"
+
+      - name: Module wasm, imports et empreinte
+        run: make wasm-build
+
+      - name: Bout en bout, client Rust contre l'edge de reference
+        run: make e2e
+
+      - name: Installer oras
+        run: |
+          set -euo pipefail
+          url="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o /tmp/oras.tar.gz "$url"
+          echo "${ORAS_SHA256}  /tmp/oras.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras
+          oras version
+
+      - name: Artefact OCI conforme aux regles d'Istio
+        run: make wasm-oci
+
+      - name: Archiver le module, pour le recuperer sans reconstruire
+        uses: actions/upload-artifact@v4
+        with:
+          name: pow-proxy-wasm
+          path: target/wasm32-wasip1/release/pow_proxy.wasm
+          if-no-files-found: error
+
+  msrv:
+    name: Rust 1.80, version minimale declaree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cargo.toml annonce rust-version = "1.80". Une promesse non verifiee est
+      # une promesse fausse : ce job la tient, ou echoue.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.80.0"
+          targets: wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compiler et tester avec la version minimale
+        run: |
+          cargo build --lib --release --target wasm32-wasip1
+          cargo test
