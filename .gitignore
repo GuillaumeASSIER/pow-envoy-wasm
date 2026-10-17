@@ -1,0 +1,16 @@
+# Cible de compilation Rust et artefacts de publication
+target/
+build/
+
+# Le state et les variables d'un eventuel deploiement local, jamais commites
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+kubeconfig
+talosconfig
+
+# Editeurs
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,38 @@
+pow-proxy (reimplementation en Rust)
+====================================
+
+Ce composant est une reecriture en Rust de pow-proxy-wasm.
+
+  Source      : https://github.com/kubewaf-io/pow-proxy-wasm
+  Commit      : 5d3004af0efbdfd98bf990b7212d0ff4a386267c
+  Licence     : Apache License 2.0
+  Copyright   : 2026 kubeWAF / pow-proxy-wasm contributors
+
+Repris tel quel depuis le depot d'origine :
+
+  - assets/challenge.html
+    Le solveur JavaScript servi au navigateur. Il definit le protocole cote
+    client ; le modifier casserait la compatibilite avec les navigateurs.
+
+Reecrit en Rust, a partir de la lecture du code d'origine :
+
+  - le challenge signe, la preuve de travail et le jeton de clearance
+    (crypt.go) ;
+  - la lecture et l'ecriture des cookies, tolerances comprises (main.go) ;
+  - la resolution de l'adresse client et de l'identifiant de connexion
+    (main.go) ;
+  - la difficulte dynamique et ses seuils (main.go) ;
+  - la configuration du plugin et ses valeurs par defaut (main.go).
+
+Modifications assumees par rapport a l'original, detaillees dans le README :
+
+  - le sel des challenges est derive par HMAC au lieu d'etre tire de
+    crypto/rand, ce qui supprime la dependance a l'alea de l'hote ;
+  - la signature est verifiee avant l'expiration ;
+  - la logique de decision est separee du code de transport ;
+  - le niveau de journalisation est teste avant de formater le message ;
+  - connection.id est manipule en octets bruts ;
+  - l'ordre des controles et la structure du code differe, le format sur le fil
+    non.
+
+Texte integral de la licence : voir LICENSE dans ce repertoire.

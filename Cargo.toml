@@ -1,0 +1,35 @@
+[package]
+name = "pow-proxy"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Challenge proof-of-work a l'edge : filtre Proxy-WASM pour Envoy et Istio"
+license = "Apache-2.0"
+repository = "https://github.com/GuillaumeASSIER/pow-envoy-wasm"
+# Le module se distribue comme artefact OCI, pas sur crates.io.
+publish = false
+
+[lib]
+# cdylib pour le module wasm charge par Envoy, rlib pour que cargo test lie la
+# crate nativement et exerce la logique pure.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# SDK Proxy-WASM : c'est lui qui apporte les hostcalls et les traits de contexte.
+proxy-wasm = "0.2.5"
+# RustCrypto : HMAC-SHA256 et SHA-256, purs, sans dependance C.
+hmac = "0.12"
+sha2 = "0.10"
+# base64url sans remplissage, format impose par le protocole.
+base64 = "0.22"
+# Structs JSON (charge utile du challenge, configuration du plugin, jeton d'API).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# Contrainte de taille pour un module charge par VM dans Envoy.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
