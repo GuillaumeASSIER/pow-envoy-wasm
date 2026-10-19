@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Vérification en cours</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: Canvas;
+    color: CanvasText;
+    padding: 1.5rem;
+  }
+  main { max-width: 30rem; width: 100%; text-align: center; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
+  p { margin: 0 0 1.5rem; line-height: 1.5; opacity: 0.85; }
+  .etat { font-size: 0.9rem; opacity: 0.7; min-height: 1.2em; margin-top: 1rem; }
+  .erreur { color: #b3261e; }
+  noscript { display: block; margin-top: 1.5rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Vérification de votre navigateur</h1>
+  <p>
+    Cette page confirme que la requête vient d'un navigateur et non d'un robot.
+    Aucun cookie publicitaire n'est utilisé et aucune donnée n'est transmise à un tiers.
+  </p>
+
+  <!-- Le composant est servi par notre infrastructure, pas par un CDN tiers. -->
+  <altcha-widget
+    challenge="/__challenge/altcha-challenge"
+    auto="onload"
+    language="fr"
+    type="checkbox"
+    display="standard"></altcha-widget>
+
+  <p class="etat" id="etat" role="status" aria-live="polite">Vérification en cours…</p>
+
+  <noscript>
+    <p>
+      Cette vérification demande JavaScript. Activez-le, ou contactez-nous
+      si vous pensez qu'il s'agit d'une erreur.
+    </p>
+  </noscript>
+</main>
+
+<script type="module" src="/__challenge/altcha.js"></script>
+<script type="module">
+  // La page ne valide rien elle-meme : elle transmet le jeton au service de
+  // verification, qui seul peut le controler aupres du generateur. Sur succes,
+  // ce service pose la clearance et renvoie vers la page demandee.
+  const etat = document.getElementById("etat");
+  const cible = new URLSearchParams(location.search).get("retour");
+  const retour = cible && cible.startsWith("/") && !cible.startsWith("//") ? cible : "/";
+
+  document.addEventListener("statechange", async (ev) => {
+    const { state, payload } = ev.detail || {};
+    if (state === "verifying") {
+      etat.textContent = "Vérification en cours…";
+      etat.classList.remove("erreur");
+      return;
+    }
+    if (state === "error" || state === "expired") {
+      etat.textContent = "La vérification a échoué. Rechargez la page pour réessayer.";
+      etat.classList.add("erreur");
+      return;
+    }
+    if (state !== "verified" || !payload) return;
+
+    etat.textContent = "Vérification acceptée, redirection…";
+    try {
+      const reponse = await fetch("/__challenge/captcha", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload }),
+        credentials: "same-origin",
+        redirect: "manual",
+      });
+      if (reponse.ok || reponse.type === "opaqueredirect" || reponse.status === 0) {
+        location.replace(retour);
+        return;
+      }
+      etat.textContent = "Vérification refusée. Rechargez la page pour réessayer.";
+      etat.classList.add("erreur");
+    } catch (_) {
+      etat.textContent = "Vérification impossible. Rechargez la page pour réessayer.";
+      etat.classList.add("erreur");
+    }
+  });
+</script>
+</body>
+</html>

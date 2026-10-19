@@ -105,11 +105,34 @@ challenge-token: {"c":"<challenge>","s":"<signature>","n":<nonce>}
 C'est ce que la version Go appelle le mode API, et c'est ce qu'utilise `powcli`.
 La clearance revient alors dans un `Set-Cookie`, comme pour un navigateur.
 
-Deux en-tetes sont lus sur la requete :
+Deux en-tetes sont lus sur la requete, mais ils n'ont pas le meme statut :
 
-- `x-challenge-difficulty` : impose la difficulte du challenge emis, dans les
-  bornes configurees. Sert aux essais et a un palier negocie cote client.
-- `challenge-token` : la solution, decrite ci-dessus.
+- `challenge-token` : la solution, presentee par le client. C'est une entree
+  client, assumee comme telle.
+- `x-challenge-action` : l'issue choisie par la couche de scoring, `drop`,
+  `captcha` ou `pow`. **Le bord doit ecraser cet en-tete** : lu depuis le client,
+  il laisserait choisir sa propre sanction. Sans en-tete, ou sur une valeur
+  inconnue, on sert une preuve de travail.
+
+## Les trois issues
+
+Une requete sans preuve valable n'est pas forcement challengingee. La couche de
+scoring tranche, le filtre applique :
+
+| En-tete | Issue | Effet |
+| --- | --- | --- |
+| absent, `pow` | challenge de preuve de travail | defaut, et repli si le scoring est muet |
+| `captcha` | page de captcha interactif | le filtre sert la page, la verification revient a un service dedie |
+| `drop` | refus sans challenge | reponse minimale, sans corps |
+
+Le defaut est volontairement le plus doux : si le scoring tombe, le service
+continue de filtrer au lieu de refuser tout le monde.
+
+Deux limites a connaitre. Un filtre HTTP ne peut pas couper une connexion : un
+`drop` se traduit par une reponse vide, pas par une reinitialisation. Et la
+verification d'un captcha demande un aller-retour vers le fournisseur, que le
+module ne fait pas : la page poste son jeton a `/__challenge/captcha`, et c'est
+l'infrastructure qui route cette requete vers le service de verification.
 
 ## Ordre de decision
 

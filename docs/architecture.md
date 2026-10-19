@@ -70,7 +70,7 @@ make e2e           # client Rust contre l'edge de reference Python
 make vectors       # regenere les vecteurs de recoupement
 ```
 
-Le module fait 264 818 octets, et son empreinte est stable d'un clone neuf a
+Le module fait 269 047 octets, et son empreinte est stable d'un clone neuf a
 l'autre. La cible est `wasm32-wasip1` : la macro `main!` du SDK exporte
 `_initialize`, donc Envoy instancie le module en mode reacteur, et Rust std
 reclame alors quatre fonctions WASI que l'hote fournit (`environ_get`,

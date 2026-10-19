@@ -23,6 +23,15 @@ use crate::{log_debug, log_error};
 /// dans le README du plugin.
 const CHALLENGE_HTML: &str = include_str!("../assets/challenge.html");
 
+/// Page servie quand le scoring demande un captcha interactif.
+///
+/// Elle ne verifie rien par elle-meme : elle charge le composant, puis poste le
+/// jeton a `/__challenge/captcha`, que l'infrastructure route vers le service de
+/// verification. Le module ne peut pas valider un jeton de captcha aupres d'un
+/// fournisseur : il n'a pas de sortie reseau garantie, et la cle de verification
+/// n'a rien a faire dans un binaire distribue.
+const CAPTCHA_HTML: &str = include_str!("../assets/captcha.html");
+
 /// Contexte HTTP : un par flux.
 pub struct PowHttp {
     shared: Rc<RefCell<Shared>>,
@@ -71,8 +80,12 @@ impl HostView for PowHttp {
         self.get_property(vec!["connection", "id"])
     }
 
-    fn difficulty_override(&self) -> Option<String> {
-        self.get_http_request_header("x-challenge-difficulty")
+    /// En-tete interne de remediation, pose par la couche de scoring.
+    ///
+    /// Le bord doit l'ecraser a l'entree : un client qui l'ecrit lui-meme
+    /// choisirait sa propre sanction.
+    fn remediation_hint(&self) -> Option<String> {
+        self.get_http_request_header("x-challenge-action")
     }
 
     fn is_https(&self) -> bool {
@@ -123,6 +136,27 @@ impl HttpContext for PowHttp {
                     Action::Continue
                 }
             }
+
+            Verdict::Captcha => {
+                log_debug!("pow-proxy: page de captcha servie");
+                if self.send_response(403, CAPTCHA_HTML) {
+                    Action::Pause
+                } else {
+                    Action::Continue
+                }
+            }
+
+            Verdict::Drop => {
+                // Refus sans challenge. Une vraie coupure de connexion ne
+                // s'obtient pas depuis un filtre HTTP : on renvoie le minimum,
+                // sans corps, et on laisse le client tirer la conclusion.
+                log_debug!("pow-proxy: requete refusee sans challenge");
+                if self.send_response(403, "") {
+                    Action::Pause
+                } else {
+                    Action::Continue
+                }
+            }
         }
     }
 
@@ -158,6 +192,23 @@ impl HttpContext for PowHttp {
 }
 
 impl PowHttp {
+    /// Envoie une reponse locale, jamais mise en cache.
+    fn send_response(&self, status: u32, body: &str) -> bool {
+        let headers: Vec<(&str, &str)> = vec![
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Cache-Control", "no-store"),
+            ("Pragma", "no-cache"),
+        ];
+
+        match proxy_wasm::hostcalls::send_http_response(status, headers, Some(body.as_bytes())) {
+            Ok(()) => true,
+            Err(err) => {
+                log_error!("pow-proxy: envoi de la reponse impossible ({err:?})");
+                false
+            }
+        }
+    }
+
     /// Sert la page de challenge avec ses cookies. Rend `false` si l'envoi a
     /// echoue, auquel cas l'appelant ne doit pas interrompre la requete.
     fn send_challenge(&self, order: &protocol::ChallengeOrder) -> bool {

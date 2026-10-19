@@ -19,8 +19,6 @@ const CHALLENGE_SALT_LEN: usize = 32;
 pub enum DifficultySource {
     /// Valeur configuree.
     Config,
-    /// En-tete `x-challenge-difficulty` de la requete.
-    Header,
     /// Valeur courante ajustee par la pression mesuree.
     Dynamic,
 }
@@ -29,8 +27,46 @@ impl DifficultySource {
     pub fn as_str(self) -> &'static str {
         match self {
             DifficultySource::Config => "config",
-            DifficultySource::Header => "entete",
             DifficultySource::Dynamic => "dynamique",
+        }
+    }
+}
+
+/// Ce qu'on fait d'une requete qui n'a pas de preuve valable.
+///
+/// Trois issues, et une seule par defaut. La decision vient d'une couche
+/// exterieure (le moteur de scoring), qui la transmet dans l'en-tete interne
+/// `x-challenge-action`. Cet en-tete doit etre ecrase par le bord : lu depuis le
+/// client, il laisserait choisir sa propre sanction.
+///
+/// En l'absence d'en-tete, ou sur une valeur inconnue, on retombe sur la preuve
+/// de travail : c'est l'issue la plus douce qui filtre quand meme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remediation {
+    /// Refuser sans rien demander : la requete est rejetee.
+    Drop,
+    /// Servir un captcha interactif, resolu par un service de verification.
+    Captcha,
+    /// Servir le challenge de preuve de travail. Defaut.
+    Pow,
+}
+
+impl Remediation {
+    /// Lit une valeur d'en-tete. Tout ce qui n'est pas reconnu vaut `Pow`.
+    pub fn parse(raw: Option<&str>) -> Remediation {
+        match raw.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("drop") | Some("deny") | Some("block") => Remediation::Drop,
+            Some("captcha") => Remediation::Captcha,
+            Some("pow") | Some("challenge") => Remediation::Pow,
+            _ => Remediation::Pow,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Remediation::Drop => "drop",
+            Remediation::Captcha => "captcha",
+            Remediation::Pow => "pow",
         }
     }
 }
@@ -56,8 +92,10 @@ pub trait HostView {
     /// L'ABI rend un entier de 8 octets petit-boutistes qui n'est pas de
     /// l'UTF-8 : la conversion en texte se fait dans `client::connection_id`.
     fn connection_id(&self) -> Option<Vec<u8>>;
-    /// En-tete `x-challenge-difficulty`, utile pour forcer une difficulte.
-    fn difficulty_override(&self) -> Option<String>;
+    /// En-tete interne `x-challenge-action`, pose par la couche de scoring.
+    ///
+    /// Il n'est jamais lu depuis le client : le bord l'ecrase a l'entree.
+    fn remediation_hint(&self) -> Option<String>;
     /// Requete arrivee en HTTPS, pour le drapeau `Secure` des cookies.
     fn is_https(&self) -> bool;
 }
@@ -88,16 +126,10 @@ impl Policy {
 
     /// Difficulte a utiliser pour un nouveau challenge.
     ///
-    /// Priorite : en-tete de la requete, puis valeur courante, puis valeur de
-    /// configuration. C'est l'ordre de la version Go.
-    pub fn effective(&self, override_header: Option<&str>) -> (u32, DifficultySource) {
-        if let Some(raw) = override_header {
-            if let Ok(v) = raw.trim().parse::<u32>() {
-                if v > 0 {
-                    return (self.clamp(v), DifficultySource::Header);
-                }
-            }
-        }
+    /// Priorite : valeur courante ajustee par la pression, puis valeur de
+    /// configuration. Aucun client ne peut imposer sa difficulte : la seule
+    /// entree exterieure est la remediation, pas un nombre.
+    pub fn effective(&self) -> (u32, DifficultySource) {
         if self.current > 0 {
             return (self.clamp(self.current), DifficultySource::Dynamic);
         }
@@ -112,8 +144,15 @@ pub enum Verdict {
     Pass,
     /// La requete passe, et une clearance doit etre posee sur la reponse.
     Grant(ClearanceGrant),
-    /// La requete doit recevoir un challenge.
+    /// La requete doit recevoir un challenge de preuve de travail.
     Challenge(ChallengeOrder),
+    /// La requete doit recevoir un captcha interactif.
+    ///
+    /// Le module sert la page et laisse la verification a un service dedie :
+    /// lui seul peut valider un jeton de captcha aupres du fournisseur.
+    Captcha,
+    /// La requete est refusee sans rien demander.
+    Drop,
 }
 
 /// Clearance a poser sur la reponse, une fois la solution acceptee.
@@ -302,20 +341,31 @@ impl Engine {
             }
         }
 
-        // 4) Aucune preuve valable : on emet un challenge signe.
-        let (difficulty, source) = self.policy.effective(view.difficulty_override().as_deref());
-        let salt = self.salts.next_bytes(now, CHALLENGE_SALT_LEN);
-        let signed = token::issue_challenge(&self.key, difficulty, &client, now, &salt);
+        // 4) Aucune preuve valable : la couche de scoring decide de l'issue.
+        //
+        // Sans en-tete, on sert une preuve de travail : c'est le defaut, et
+        // c'est aussi ce qui se passe si le scoring est indisponible.
+        match Remediation::parse(view.remediation_hint().as_deref()) {
+            Remediation::Drop => Verdict::Drop,
 
-        self.issued_in_window = self.issued_in_window.saturating_add(1);
+            Remediation::Captcha => Verdict::Captcha,
 
-        Verdict::Challenge(ChallengeOrder {
-            signed,
-            difficulty,
-            source,
-            max_age: crate::CHALLENGE_LIFETIME_SECS as i64,
-            secure,
-        })
+            Remediation::Pow => {
+                let (difficulty, source) = self.policy.effective();
+                let salt = self.salts.next_bytes(now, CHALLENGE_SALT_LEN);
+                let signed = token::issue_challenge(&self.key, difficulty, &client, now, &salt);
+
+                self.issued_in_window = self.issued_in_window.saturating_add(1);
+
+                Verdict::Challenge(ChallengeOrder {
+                    signed,
+                    difficulty,
+                    source,
+                    max_age: crate::CHALLENGE_LIFETIME_SECS as i64,
+                    secure,
+                })
+            }
+        }
     }
 }
 
@@ -399,7 +449,7 @@ mod tests {
         xff: Option<String>,
         real: Option<String>,
         cid: Option<Vec<u8>>,
-        override_diff: Option<String>,
+        action_hint: Option<String>,
         https: bool,
         reads: RefCell<Vec<&'static str>>,
     }
@@ -440,8 +490,8 @@ mod tests {
         fn connection_id(&self) -> Option<Vec<u8>> {
             read!(self, "cid", self.cid.clone())
         }
-        fn difficulty_override(&self) -> Option<String> {
-            read!(self, "diff", self.override_diff.clone())
+        fn remediation_hint(&self) -> Option<String> {
+            read!(self, "action", self.action_hint.clone())
         }
         fn is_https(&self) -> bool {
             self.reads.borrow_mut().push("https");
@@ -734,28 +784,76 @@ mod tests {
     }
 
     #[test]
-    fn difficulty_override_header_wins_and_is_clamped() {
+    fn remediation_hint_selects_the_outcome() {
         let mut e = engine();
-        for (given, want, source) in [
-            ("20", 20u32, DifficultySource::Header),
-            ("99", 26, DifficultySource::Header),
-            ("1", 6, DifficultySource::Header),
-            ("0", 8, DifficultySource::Config),
-            ("pas un nombre", 8, DifficultySource::Config),
-        ] {
+
+        // Sans en-tete, ou avec une valeur inconnue, on sert une preuve de
+        // travail : c'est le defaut, et il resiste a une couche de scoring
+        // absente ou fautive.
+        for given in [None, Some(""), Some("n'importe quoi"), Some("pow")] {
             let mut view = MockView::new();
             view.peer = Some("203.0.113.9".into());
-            if given != "absent" {
-                view.override_diff = Some(given.to_string());
-            }
+            view.action_hint = given.map(|v| v.to_string());
             match e.handle(&view, NOW) {
                 Verdict::Challenge(order) => {
-                    assert_eq!(order.difficulty, want, "difficulte pour {given:?}");
-                    assert_eq!(order.source, source, "source pour {given:?}");
+                    assert_eq!(order.difficulty, 8, "difficulte pour {given:?}");
+                    assert_eq!(order.source, DifficultySource::Config);
                 }
-                other => panic!("attendu Challenge, obtenu {other:?}"),
+                other => panic!("{given:?} : attendu Challenge, obtenu {other:?}"),
             }
         }
+
+        for given in ["captcha", "CAPTCHA"] {
+            let mut view = MockView::new();
+            view.peer = Some("203.0.113.9".into());
+            view.action_hint = Some(given.to_string());
+            assert_eq!(e.handle(&view, NOW), Verdict::Captcha, "pour {given:?}");
+        }
+
+        for given in ["drop", "DENY", "block"] {
+            let mut view = MockView::new();
+            view.peer = Some("203.0.113.9".into());
+            view.action_hint = Some(given.to_string());
+            assert_eq!(e.handle(&view, NOW), Verdict::Drop, "pour {given:?}");
+        }
+    }
+
+    #[test]
+    fn a_clearance_still_wins_over_a_remediation_hint() {
+        // Un client deja valide ne doit pas etre puni parce qu'une couche de
+        // scoring a mal note son adresse : la clearance passe avant tout.
+        let mut e = engine();
+        let mut view = MockView::new();
+        view.peer = Some("203.0.113.9".into());
+
+        let order = match e.handle(&view, NOW) {
+            Verdict::Challenge(order) => order,
+            other => panic!("attendu Challenge, obtenu {other:?}"),
+        };
+        let nonce = token::solve(&order.signed.c, order.difficulty, 1 << 22).unwrap();
+
+        let clearance = match e.handle(
+            &{
+                let mut v = MockView::new();
+                v.peer = Some("203.0.113.9".into());
+                v.cookies = Some(format!(
+                    "challenge={}; challenge-sig={}; challenge-nonce={nonce}",
+                    order.signed.c, order.signed.s
+                ));
+                v
+            },
+            NOW + 1,
+        ) {
+            Verdict::Grant(g) => g,
+            other => panic!("attendu Grant, obtenu {other:?}"),
+        };
+
+        let mut scored = MockView::new();
+        scored.peer = Some("203.0.113.9".into());
+        scored.cookies = Some(format!("challenge-clearance={}", clearance.token));
+        scored.action_hint = Some("drop".to_string());
+
+        assert_eq!(e.handle(&scored, NOW + 2), Verdict::Pass);
     }
 
     #[test]

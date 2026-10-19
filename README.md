@@ -47,7 +47,7 @@ Go fonctionne sans modification contre celle-ci, et l'inverse est vrai.
 
 ## Ce qui change par rapport a la version Go
 
-Le format ne change pas. L'implementation, si, sur six points, tous motives :
+Le format ne change pas. L'implementation, si, sur sept points, tous motives :
 
 1. **Sel derive par HMAC, pas par `crypto/rand`.** Le sel d'un challenge est
    `HMAC(secret, etiquette || sequence || horodatage || compteur)`. Consequence
@@ -71,6 +71,13 @@ Le format ne change pas. L'implementation, si, sur six points, tous motives :
 6. **`connection.id` manipule en octets bruts.** L'ABI rend huit octets
    petit-boutistes qui ne sont pas de l'UTF-8 valide ; passer par une chaine
    avant decodage perdrait l'identifiant une fois sur deux environ.
+7. **Plus d'en-tete de difficulte pilote par le client.** La version Go lit
+   `x-challenge-difficulty` sur la requete du client et l'applique apres bornage :
+   le client choisissait donc son plancher de difficulte. Ici la difficulte ne
+   vient que de la pression mesuree et de la configuration. La seule entree
+   exterieure est la remediation, `drop`, `captcha` ou `pow`, dans un en-tete
+   interne que le bord ecrase, et qui retombe sur `pow` s'il est absent.
+
 
 ## Structure
 
@@ -120,7 +127,7 @@ Verifie pour de vrai, dans ce depot :
   ne lit ni l'identifiant de connexion, ni le schema, ni la difficulte.
 - **Bout en bout sur sockets** : `powcli` resout un challenge emis par le serveur
   de reference Python et obtient une clearance, sur une seule connexion TCP.
-- **Module wasm** : 259 Kio (264 818 octets), construit pour `wasm32-wasip1`,
+- **Module wasm** : 263 Kio (269 047 octets), construit pour `wasm32-wasip1`,
   imports verifies (ABI `env` plus `environ_get`, `environ_sizes_get`, `fd_write`,
   `proc_exit`).
 - **Artefact OCI** : conforme aux regles du recuperateur d'Istio, lues dans

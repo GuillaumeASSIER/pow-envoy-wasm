@@ -97,6 +97,26 @@ Les choix qui comptent :
 
 Le `pluginConfig` est documente cle par cle dans `docs/configuration.md`.
 
+## Routes internes a router vers le service de verification
+
+Quand le scoring demande un captcha, le filtre sert une page qui a besoin de
+trois routes. Elles ne doivent **jamais** atteindre l'origine :
+
+| Route | Methode | Role |
+| --- | --- | --- |
+| `/__challenge/altcha.js` | GET | le composant de captcha, servi par votre infrastructure |
+| `/__challenge/altcha-challenge` | GET | emission d'un challenge de captcha |
+| `/__challenge/captcha` | POST | verification du jeton, puis pose de la clearance |
+
+Ces routes appartiennent au service de verification, pas au module : un filtre
+WASM n'a pas de sortie reseau garantie, et la cle de verification d'un captcha
+n'a rien a faire dans un binaire distribue. Meme logique que CrowdSec, qui fait
+router `/crowdsec-internal/challenge/*` vers son composant AppSec.
+
+Deux regles qui evitent les pannes silencieuses : la requete `POST` doit
+conserver son corps jusqu'au service, et la reponse du service doit pouvoir
+poser un `Set-Cookie` (la clearance) sans que le proxy la reecrive.
+
 ## Verifier que le filtre tourne
 
 Au chargement, le module journalise sa configuration effective :
